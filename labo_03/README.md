@@ -43,6 +43,4 @@ Avancement
 - [ ] Gestion des DEL
 - [ ] Tests du parcours complet
 
-Auteur
 
-Jean Louis KOUDJONOU
