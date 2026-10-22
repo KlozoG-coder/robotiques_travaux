@@ -45,16 +45,13 @@ enum AppState {
   MOVE_THIRD_SEGMENT,
   TURN_180,
   FINISHED,
-  RETURN_THIRD_SEGMENT,
-  RETURN_TURN_LEFT,
-  RETURN_SECOND_SEGMENT,
-  RETURN_TURN_RIGHT,
-  RETURN_FIRST_SEGMENT,
+  RETOUR,
   RETURN_FINISHED,
   TURN_ERROR
 };
 
 AppState appState = WAIT_FOR_START;
+int returnStep = 0; // 0: segment 3, 1: gauche, 2: segment 2, 3: droite, 4: segment 1
 
 unsigned long currentTime = 0;
 
@@ -219,7 +216,7 @@ void moveFirstSegmentState(unsigned long ct) {
 }
 
 // Fonction commune aux pivots
-void turnState(int direction, float targetAngle, AppState nextState, unsigned long ct) {
+bool turnState(int direction, float targetAngle, AppState nextState, unsigned long ct) {
   static bool firstTime = true;
   static unsigned long turnStartTime = 0;
   static float turnStartAngle = 0;
@@ -234,7 +231,7 @@ void turnState(int direction, float targetAngle, AppState nextState, unsigned lo
     Serial.println(targetAngle);
 
     firstTime = false;
-    return;
+    return false;
   }
 
   float currentAngle = gyro.getAngleZ() - turnStartAngle;
@@ -248,7 +245,7 @@ void turnState(int direction, float targetAngle, AppState nextState, unsigned lo
 
     firstTime = true;
     appState = nextState;
-    return;
+    return true;
   }
 
   if (ct - turnStartTime >= MAX_TURN_TIME) {
@@ -258,7 +255,7 @@ void turnState(int direction, float targetAngle, AppState nextState, unsigned lo
 
     firstTime = true;
     appState = TURN_ERROR;
-    return;
+    return false;
   }
 
   int speed = TURN_SPEED;
@@ -269,6 +266,7 @@ void turnState(int direction, float targetAngle, AppState nextState, unsigned lo
 
   leftMotor.setMotorPwm(direction * speed);
   rightMotor.setMotorPwm(direction * speed);
+  return false;
 }
 
 // Segment 2
@@ -425,23 +423,53 @@ void showRainbow(unsigned long ct) {
   led.show();
 }
 
-void returnSegmentState(long targetTicks, AppState nextState, unsigned long ct) {
+// Retour d'un segment : vrai quand la distance est atteinte.
+bool returnSegmentState(long targetTicks, unsigned long ct) {
   static bool firstTime = true;
   if (firstTime) {
     startSegment();
     rainbowLastTime = ct - 70;
     firstTime = false;
-    return;
+    return false;
   }
 
   showRainbow(ct);
   if (getAverageTicks() >= targetTicks) {
     stopMotors();
     firstTime = true;
-    appState = nextState;
-    return;
+    return true;
   }
   moveStraight(MOTOR_SPEED);
+  return false;
+}
+
+// Un seul etat FSM pour les cinq mouvements du retour.
+void returnToBase(unsigned long ct) {
+  switch (returnStep) {
+    case 0: // Revenir sur le segment 3
+      if (returnSegmentState(calculateTicks(TARGET_DISTANCE), ct)) returnStep++;
+      break;
+
+    case 1: // Pivot gauche
+      showRainbow(ct);
+      if (turnState(-1, 90.0, RETOUR, ct)) returnStep++;
+      break;
+
+    case 2: // Revenir sur le segment 2
+      if (returnSegmentState(secondActualTicks, ct)) returnStep++;
+      break;
+
+    case 3: // Pivot droit
+      showRainbow(ct);
+      if (turnState(1, 90.0, RETOUR, ct)) returnStep++;
+      break;
+
+    case 4: // Revenir sur le segment 1
+      if (returnSegmentState(calculateTicks(TARGET_DISTANCE), ct)) {
+        appState = RETURN_FINISHED;
+      }
+      break;
+  }
 }
 
 void returnFinishedState(unsigned long ct) {
@@ -477,33 +505,15 @@ void stateManager(unsigned long ct) {
       break;
 
     case TURN_180:
-      turnState(1, 180.0, RETURN_THIRD_SEGMENT, ct);
+      turnState(1, 180.0, RETOUR, ct);
       break;
 
     case FINISHED:
       finishedState(ct);
       break;
 
-    case RETURN_THIRD_SEGMENT:
-      returnSegmentState(calculateTicks(TARGET_DISTANCE), RETURN_TURN_LEFT, ct);
-      break;
-
-    case RETURN_TURN_LEFT:
-      showRainbow(ct);
-      turnState(-1, 90.0, RETURN_SECOND_SEGMENT, ct);
-      break;
-
-    case RETURN_SECOND_SEGMENT:
-      returnSegmentState(secondActualTicks, RETURN_TURN_RIGHT, ct);
-      break;
-
-    case RETURN_TURN_RIGHT:
-      showRainbow(ct);
-      turnState(1, 90.0, RETURN_FIRST_SEGMENT, ct);
-      break;
-
-    case RETURN_FIRST_SEGMENT:
-      returnSegmentState(calculateTicks(TARGET_DISTANCE), RETURN_FINISHED, ct);
+    case RETOUR:
+      returnToBase(ct);
       break;
 
     case RETURN_FINISHED:
