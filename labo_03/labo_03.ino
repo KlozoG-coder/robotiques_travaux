@@ -1,38 +1,73 @@
-
 #include <MeAuriga.h>
 
-// Labo 03 - DA: 2384980 
+// DA : 2384980
 
 MeEncoderOnBoard leftMotor(SLOT1);
 MeEncoderOnBoard rightMotor(SLOT2);
 MeGyro gyro(0, 0x69);
-MeUltrasonicSensor ultrasonicSensor(PORT_6);
+MeUltrasonicSensor ultrasonicSensor(PORT_10);
 MeRGBLed led(0, 12);
 
-const unsigned long START_DELAY = 3000;
-const unsigned long SENSOR_RATE = 50;
+// Distances
+const float TARGET_DISTANCE = 90.0;
+const float STOP_DISTANCE = 30.0;
+const float SLOW_DISTANCE = 50.0;
 
-const float TARGET_DISTANCE = 100.0;
-const float STOP_DISTANCE_CM = 30.0;
+// Encodeurs
 const float WHEEL_DIAMETER = 6.5;
 const float GEAR_RATIO = 39.267;
-const float GYRO_CORRECTION = 3.0;
-
 const int MOTOR_PULSES = 9;
-const int MOTOR_SPEED = 100;
-const int TURN_SPEED = 80;
 
+// Vitesses
+const int MOTOR_SPEED = 100;
+const int SLOW_SPEED = 65;
+const int TURN_SPEED = 70;
+const int TURN_SLOW_SPEED = 50;
+
+// Correction de trajectoire
+const float GYRO_CORRECTION = 1.5;
+const float ENCODER_CORRECTION = 0.15;
+const int MAX_CORRECTION = 35;
+
+// Temps
+const unsigned long START_DELAY = 3000;
+const unsigned long SENSOR_RATE = 50;
+const unsigned long BLINK_RATE = 50;
+const unsigned long MAX_TURN_TIME = 6000;
+
+// Machine a etats
 enum AppState {
   WAIT_FOR_START,
-  MOVE_FORWARD,
+  MOVE_FIRST_SEGMENT,
   TURN_LEFT,
-  MOVE_TO_OBSTACLE,
-  STOP
+  MOVE_SECOND_SEGMENT,
+  TURN_RIGHT,
+  MOVE_THIRD_SEGMENT,
+  TURN_180,
+  FINISHED,
+  RETURN_THIRD_SEGMENT,
+  RETURN_TURN_LEFT,
+  RETURN_SECOND_SEGMENT,
+  RETURN_TURN_RIGHT,
+  RETURN_FIRST_SEGMENT,
+  RETURN_FINISHED,
+  TURN_ERROR
 };
 
 AppState appState = WAIT_FOR_START;
+
 unsigned long currentTime = 0;
 
+long startLeft = 0;
+long startRight = 0;
+long secondTargetTicks = 0;
+long secondActualTicks = 0;
+unsigned long rainbowLastTime = 0;
+int rainbowStep = 0;
+
+float startAngle = 0;
+
+// Interruptions
 void leftMotorInterrupt() {
   if (digitalRead(leftMotor.getPortB()) == 0) {
     leftMotor.pulsePosMinus();
@@ -49,22 +84,52 @@ void rightMotorInterrupt() {
   }
 }
 
+// Convertir une distance en ticks
 long calculateTicks(float distanceCm) {
-  float ticksPerTurn = MOTOR_PULSES * GEAR_RATIO;
-  float circumference = WHEEL_DIAMETER * PI;
-  return round((distanceCm / circumference) * ticksPerTurn);
+  return round(distanceCm * MOTOR_PULSES * GEAR_RATIO / (WHEEL_DIAMETER * PI));
 }
 
+// Mesurer les ticks des roues
+long getLeftTicks() {
+  return abs(leftMotor.getPulsePos() - startLeft);
+}
+
+long getRightTicks() {
+  return abs(rightMotor.getPulsePos() - startRight);
+}
+
+long getAverageTicks() {
+  return (getLeftTicks() + getRightTicks()) / 2;
+}
+
+// Arreter les moteurs
 void stopMotors() {
   leftMotor.setMotorPwm(0);
   rightMotor.setMotorPwm(0);
 }
 
-void moveStraight() {
-  float correction = gyro.getAngleZ() * GYRO_CORRECTION;
+// Debut d'un segment
+void startSegment() {
+  stopMotors();
 
-  int leftSpeed = constrain(MOTOR_SPEED - correction, 0, 255);
-  int rightSpeed = constrain(MOTOR_SPEED + correction, 0, 255);
+  startLeft = leftMotor.getPulsePos();
+  startRight = rightMotor.getPulsePos();
+
+  startAngle = gyro.getAngleZ();
+}
+
+// Avancer en ligne droite
+void moveStraight(int speed) {
+  const int RIGHT_MOTOR_TRIM = 3;
+
+  float angle = gyro.getAngleZ() - startAngle;
+  float correction = angle * GYRO_CORRECTION +
+    (getLeftTicks() - getRightTicks()) * ENCODER_CORRECTION;
+
+  correction = constrain(correction, -MAX_CORRECTION, MAX_CORRECTION);
+
+  int leftSpeed = constrain(speed + correction, 0, 255);
+  int rightSpeed = constrain(speed - correction + RIGHT_MOTOR_TRIM, 0, 255);
 
   leftMotor.setMotorPwm(-leftSpeed);
   rightMotor.setMotorPwm(rightSpeed);
@@ -75,35 +140,32 @@ void clearLeds() {
   led.show();
 }
 
+void showSegmentLeds(int activeLed) {
+  for (int i = 1; i <= 7; i++) {
+    led.setColor(i, 0, 0, 0);
+  }
+
+  led.setColor(activeLed, 0, 255, 0);
+  led.show();
+}
+
 void showProgress(long currentTicks, long targetTicks) {
   int numberOfLeds = 0;
 
   if (targetTicks > 0) {
-    numberOfLeds = (currentTicks * 7L) / targetTicks;
+    numberOfLeds = currentTicks * 7L / targetTicks;
   }
 
   numberOfLeds = constrain(numberOfLeds, 0, 7);
 
-  for (int ledNumber = 1; ledNumber <= 7; ledNumber++) {
-    if (ledNumber <= numberOfLeds) {
-      led.setColor(ledNumber, 0, 255, 0);
+  for (int i = 1; i <= 7; i++) {
+    if (i <= numberOfLeds) {
+      led.setColor(i, 0, 255, 0);
     } else {
-      led.setColor(ledNumber, 0, 0, 0);
+      led.setColor(i, 0, 0, 0);
     }
   }
 
-  led.show();
-}
-
-void showFirstSegmentLeds() {
-  clearLeds();
-  led.setColor(12, 0, 255, 0);
-  led.show();
-}
-
-void showSecondSegmentLeds() {
-  clearLeds();
-  led.setColor(11, 0, 255, 0);
   led.show();
 }
 
@@ -114,6 +176,7 @@ void waitForStartState(unsigned long ct) {
   if (firstTime) {
     stopMotors();
     clearLeds();
+
     lastTime = ct;
     firstTime = false;
     return;
@@ -121,174 +184,338 @@ void waitForStartState(unsigned long ct) {
 
   if (ct - lastTime >= START_DELAY) {
     firstTime = true;
-    appState = MOVE_FORWARD;
+    appState = MOVE_FIRST_SEGMENT;
   }
 }
 
-void moveForwardState(unsigned long ct) {
+// Segment 1
+void moveFirstSegmentState(unsigned long ct) {
   static bool firstTime = true;
-  static long startLeftTicks = 0;
-  static long startRightTicks = 0;
 
   if (firstTime) {
-    stopMotors();
+    startSegment();
+    showSegmentLeds(12);
 
-    startLeftTicks = leftMotor.getPulsePos();
-    startRightTicks = rightMotor.getPulsePos();
-
-    gyro.resetData();
-    showFirstSegmentLeds();
-
-    Serial.println("First segment");
+    Serial.println("Segment 1");
 
     firstTime = false;
     return;
   }
 
-  long leftTicks = abs(leftMotor.getPulsePos() - startLeftTicks);
-  long rightTicks = abs(rightMotor.getPulsePos() - startRightTicks);
-  long averageTicks = (leftTicks + rightTicks) / 2;
+  long currentTicks = getAverageTicks();
   long targetTicks = calculateTicks(TARGET_DISTANCE);
 
-  showProgress(averageTicks, targetTicks);
+  showProgress(currentTicks, targetTicks);
 
-  if (averageTicks >= targetTicks) {
+  if (currentTicks >= targetTicks) {
     stopMotors();
-    showProgress(targetTicks, targetTicks);
 
     firstTime = true;
     appState = TURN_LEFT;
     return;
   }
 
-  moveStraight();
+  moveStraight(MOTOR_SPEED);
 }
 
-void turnLeftState(unsigned long ct) {
+// Fonction commune aux pivots
+void turnState(int direction, float targetAngle, AppState nextState, unsigned long ct) {
   static bool firstTime = true;
+  static unsigned long turnStartTime = 0;
+  static float turnStartAngle = 0;
 
   if (firstTime) {
     stopMotors();
-    gyro.resetData();
 
-    Serial.println("Turning left");
+    turnStartAngle = gyro.getAngleZ();
+    turnStartTime = ct;
+
+    Serial.print("Pivot de ");
+    Serial.println(targetAngle);
 
     firstTime = false;
     return;
   }
 
-  float currentAngle = gyro.getAngleZ();
+  float currentAngle = gyro.getAngleZ() - turnStartAngle;
 
-  if (abs(currentAngle) >= 90.0) {
+  float angle = abs(currentAngle);
+
+  if (angle >= targetAngle) {
     stopMotors();
 
+    Serial.println("Pivot termine");
+
     firstTime = true;
-    appState = MOVE_TO_OBSTACLE;
+    appState = nextState;
     return;
   }
 
-  leftMotor.setMotorPwm(TURN_SPEED);
-  rightMotor.setMotorPwm(TURN_SPEED);
+  if (ct - turnStartTime >= MAX_TURN_TIME) {
+    stopMotors();
+
+    Serial.println("ERREUR : pivot trop long");
+
+    firstTime = true;
+    appState = TURN_ERROR;
+    return;
+  }
+
+  int speed = TURN_SPEED;
+
+  if (angle >= targetAngle - 20.0) {
+    speed = TURN_SLOW_SPEED;
+  }
+
+  leftMotor.setMotorPwm(direction * speed);
+  rightMotor.setMotorPwm(direction * speed);
 }
 
-void moveToObstacleState(unsigned long ct) {
+// Segment 2
+void moveSecondSegmentState(unsigned long ct) {
   static bool firstTime = true;
   static unsigned long lastTime = 0;
-
-  static long startLeftTicks = 0;
-  static long startRightTicks = 0;
-  static long targetTicks = 0;
+  static bool distanceReady = false;
+  static int currentSpeed = 0;
 
   if (firstTime) {
-    stopMotors();
-    showSecondSegmentLeds();
-    gyro.resetData();
+    startSegment();
+    showSegmentLeds(11);
 
-    startLeftTicks = leftMotor.getPulsePos();
-    startRightTicks = rightMotor.getPulsePos();
-
-    float startDistance = ultrasonicSensor.distanceCm();
-
-    if (startDistance <= 0 || startDistance >= 400) {
-      Serial.println("Invalid distance");
-      appState = STOP;
-      return;
-    }
-
-    float travelDistance = startDistance - STOP_DISTANCE_CM;
-
-    if (travelDistance < 0) {
-      travelDistance = 0;
-    }
-
-    targetTicks = calculateTicks(travelDistance);
+    distanceReady = false;
+    currentSpeed = 0;
+    secondTargetTicks = 0;
 
     lastTime = ct;
     firstTime = false;
+
+    Serial.println("Segment 2");
     return;
   }
 
-  if (ct - lastTime < SENSOR_RATE) {
-    return;
+  if (ct - lastTime >= SENSOR_RATE) {
+    lastTime = ct;
+
+    float distance = ultrasonicSensor.distanceCm();
+
+    Serial.print("Distance : ");
+    Serial.println(distance);
+
+    if (distance <= 0 || distance >= 400) {
+      currentSpeed = 0;
+    } else {
+      if (!distanceReady) {
+        secondTargetTicks = calculateTicks(distance - STOP_DISTANCE);
+        distanceReady = true;
+      }
+
+      if (distance <= STOP_DISTANCE) {
+        stopMotors();
+        secondActualTicks = getAverageTicks();
+        showProgress(1, 1);
+
+        firstTime = true;
+        appState = TURN_RIGHT;
+        return;
+      }
+
+      if (distance <= SLOW_DISTANCE) {
+        currentSpeed = SLOW_SPEED;
+      } else {
+        currentSpeed = MOTOR_SPEED;
+      }
+    }
   }
 
-  lastTime = ct;
+  showProgress(
+    getAverageTicks(),
+    secondTargetTicks
+  );
 
-  float obstacleDistance = ultrasonicSensor.distanceCm();
-
-  if (obstacleDistance <= 0 || obstacleDistance >= 400) {
+  if (currentSpeed == 0) {
     stopMotors();
-    return;
+  } else {
+    moveStraight(currentSpeed);
   }
-
-  long leftTicks = abs(leftMotor.getPulsePos() - startLeftTicks);
-  long rightTicks = abs(rightMotor.getPulsePos() - startRightTicks);
-  long averageTicks = (leftTicks + rightTicks) / 2;
-
-  showProgress(averageTicks, targetTicks);
-
-  if (obstacleDistance <= STOP_DISTANCE_CM) {
-    stopMotors();
-    showProgress(targetTicks, targetTicks);
-
-    Serial.println("Obstacle reached");
-
-    firstTime = true;
-    appState = STOP;
-    return;
-  }
-
-  moveStraight();
 }
 
-void stopState(unsigned long ct) {
+// Segment 3
+void moveThirdSegmentState(unsigned long ct) {
+  static bool firstTime = true;
+
+  if (firstTime) {
+    startSegment();
+    showSegmentLeds(10);
+
+    Serial.println("Segment 3");
+
+    firstTime = false;
+    return;
+  }
+
+  long currentTicks = getAverageTicks();
+  long targetTicks = calculateTicks(TARGET_DISTANCE);
+
+  showProgress(currentTicks, targetTicks);
+
+  if (currentTicks >= targetTicks) {
+    stopMotors();
+
+    firstTime = true;
+    appState = TURN_180;
+    return;
+  }
+
+  moveStraight(MOTOR_SPEED);
+}
+
+// Fin
+void finishedState(unsigned long ct) {
+  static bool firstTime = true;
+  static unsigned long lastTime = 0;
+  static bool ledsOn = false;
+
+  if (firstTime) {
+    stopMotors();
+    clearLeds();
+
+    lastTime = ct;
+    ledsOn = false;
+    firstTime = false;
+
+    Serial.println("Mission terminee");
+  }
+
+  if (ct - lastTime >= BLINK_RATE) {
+    lastTime = ct;
+    ledsOn = !ledsOn;
+
+    for (int i = 8; i <= 12; i++) {
+      if (ledsOn) {
+        led.setColor(i, 0, 255, 0);
+      } else {
+        led.setColor(i, 0, 0, 0);
+      }
+    }
+
+    led.show();
+  }
+}
+
+// Erreur de pivot
+void turnErrorState() {
   stopMotors();
 }
 
+// Bonus 
+
+void showRainbow(unsigned long ct) {
+  if (ct - rainbowLastTime < 70) return;
+  rainbowLastTime = ct;
+  rainbowStep = (rainbowStep + 1) % 12;
+
+  const byte colors[6][3] = {
+    {255, 0, 0}, {255, 100, 0}, {255, 255, 0},
+    {0, 255, 0}, {0, 0, 255}, {150, 0, 255}
+  };
+  for (int i = 1; i <= 12; i++) {
+    int colorIndex = ((i - 1 + rainbowStep) / 2) % 6;
+    led.setColor(i, colors[colorIndex][0], colors[colorIndex][1], colors[colorIndex][2]);
+  }
+  led.show();
+}
+
+void returnSegmentState(long targetTicks, AppState nextState, unsigned long ct) {
+  static bool firstTime = true;
+  if (firstTime) {
+    startSegment();
+    rainbowLastTime = ct - 70;
+    firstTime = false;
+    return;
+  }
+
+  showRainbow(ct);
+  if (getAverageTicks() >= targetTicks) {
+    stopMotors();
+    firstTime = true;
+    appState = nextState;
+    return;
+  }
+  moveStraight(MOTOR_SPEED);
+}
+
+void returnFinishedState(unsigned long ct) {
+  stopMotors();
+  showRainbow(ct);
+}
+
+// Gestionnaire FSM
 void stateManager(unsigned long ct) {
   switch (appState) {
     case WAIT_FOR_START:
       waitForStartState(ct);
       break;
 
-    case MOVE_FORWARD:
-      moveForwardState(ct);
+    case MOVE_FIRST_SEGMENT:
+      moveFirstSegmentState(ct);
       break;
 
     case TURN_LEFT:
-      turnLeftState(ct);
+      turnState(-1, 90.0, MOVE_SECOND_SEGMENT, ct);
       break;
 
-    case MOVE_TO_OBSTACLE:
-      moveToObstacleState(ct);
+    case MOVE_SECOND_SEGMENT:
+      moveSecondSegmentState(ct);
       break;
 
-    case STOP:
-      stopState(ct);
+    case TURN_RIGHT:
+      turnState(1, 90.0, MOVE_THIRD_SEGMENT, ct);
+      break;
+
+    case MOVE_THIRD_SEGMENT:
+      moveThirdSegmentState(ct);
+      break;
+
+    case TURN_180:
+      turnState(1, 180.0, RETURN_THIRD_SEGMENT, ct);
+      break;
+
+    case FINISHED:
+      finishedState(ct);
+      break;
+
+    case RETURN_THIRD_SEGMENT:
+      returnSegmentState(calculateTicks(TARGET_DISTANCE), RETURN_TURN_LEFT, ct);
+      break;
+
+    case RETURN_TURN_LEFT:
+      showRainbow(ct);
+      turnState(-1, 90.0, RETURN_SECOND_SEGMENT, ct);
+      break;
+
+    case RETURN_SECOND_SEGMENT:
+      returnSegmentState(secondActualTicks, RETURN_TURN_RIGHT, ct);
+      break;
+
+    case RETURN_TURN_RIGHT:
+      showRainbow(ct);
+      turnState(1, 90.0, RETURN_FIRST_SEGMENT, ct);
+      break;
+
+    case RETURN_FIRST_SEGMENT:
+      returnSegmentState(calculateTicks(TARGET_DISTANCE), RETURN_FINISHED, ct);
+      break;
+
+    case RETURN_FINISHED:
+      returnFinishedState(ct);
+      break;
+
+    case TURN_ERROR:
+      turnErrorState();
       break;
   }
 }
-
+// Initialisation
 void setup() {
   Serial.begin(115200);
 
@@ -299,6 +526,7 @@ void setup() {
   rightMotor.setRatio(GEAR_RATIO);
 
   attachInterrupt(leftMotor.getIntNum(), leftMotorInterrupt, RISING);
+
   attachInterrupt(rightMotor.getIntNum(), rightMotorInterrupt, RISING);
 
   gyro.begin();
@@ -310,6 +538,8 @@ void setup() {
 
 void loop() {
   currentTime = millis();
+
   gyro.update();
+
   stateManager(currentTime);
 }
