@@ -1,4 +1,4 @@
-Labo 03 
+Labo\_03
 
 Description
 
@@ -6,11 +6,11 @@ Ce laboratoire consiste à programmer le robot Makeblock Ranger pour effectuer u
 
 Matériel utilisé
 
-- Robot Makeblock Ranger
-- Encodeurs des moteurs
-- Gyroscope
-- Capteur ultrasonique
-- DEL RGB
+* Robot Makeblock Ranger
+* Encodeurs des moteurs
+* Gyroscope
+* Capteur ultrasonique
+* DEL RGB
 
 Fonctionnement
 
@@ -29,18 +29,17 @@ Programmation
 
 Le programme utilise :
 
-- Une machine à états (FSM).
-- "millis()" pour gérer le temps.
-- Les encodeurs pour mesurer les déplacements.
-- Le gyroscope pour corriger la trajectoire.
+* Une machine à états (FSM).
+* "millis()" pour gérer le temps.
+* Les encodeurs pour mesurer les déplacements.
+* Le gyroscope pour corriger la trajectoire.
 
 Avancement
 
-- [ ] Création du projet
-- [ ] Machine à états
-- [ ] Calcul des ticks
-- [ ] Déplacements et pivots
-- [ ] Gestion des DEL
-- [ ] Tests du parcours complet
-
+* \[ ] Création du projet
+* \[ ] Machine à états
+* \[ ] Calcul des ticks
+* \[ ] Déplacements et pivots
+* \[ ] Gestion des DEL
+* \[ ] Tests du parcours complet
 
