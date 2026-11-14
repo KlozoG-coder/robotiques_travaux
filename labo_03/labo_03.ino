@@ -48,10 +48,11 @@ enum AppState {
   RETOUR,
   RETURN_FINISHED,
   TURN_ERROR
+
 };
 
 AppState appState = WAIT_FOR_START;
-int returnStep = 0; // 0: segment 3, 1: gauche, 2: segment 2, 3: droite, 4: segment 1
+int returnStep = 0; 
 
 unsigned long currentTime = 0;
 
